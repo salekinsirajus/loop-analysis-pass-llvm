@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0)
-project("project3")
+project("custom_loop_analysis")
 
 set(CMAKE_CXX_STANDARD 14)
 #set(CMAKE_VERBOSE_MAKEFILE ON)
@@ -18,11 +18,11 @@ llvm_map_components_to_libnames(llvm_libs analysis bitreader bitwriter codegen c
 
 include_directories(.)
 
-add_executable(p3 p3.cpp)
-target_link_libraries(p3 ${llvm_libs})
+add_executable(cla custom_loop_analysis.cpp)
+target_link_libraries(cla ${llvm_libs})
 
 enable_testing()
-add_test(NAME Usage COMMAND p3 -h)
+add_test(NAME Usage COMMAND cla -h)
 set_tests_properties(Usage
         PROPERTIES PASS_REGULAR_EXPRESSION "USAGE:"
         )
