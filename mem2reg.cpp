@@ -177,3 +177,18 @@ static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops 
 static llvm::Statistic NumLoopsNoStoreWithLoad = {"", "NumLoopsNoStoreWithLoad", "subset of loops with no stores that also have at least one load."};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+
+/* Pseudo Code for Mem2Reg
+
+for each alloca instruction, a:
+ for each use of a, u:
+ 	if u is not the address operand of a load or a store:
+ 		skip a 
+ bb = LLVMGetInstructionParent(a)
+ for each use of a, u:
+ 	if u is a store instruction:
+ 		if no phi for a in DomFrontier(u):
+ 			place a phi in DomFrontier(u)
+ Rename(a, bb, undef) 
+
+*/
