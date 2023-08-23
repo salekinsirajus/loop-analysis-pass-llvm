@@ -34,7 +34,7 @@ mkdir build
 ```
 Run cmake
 ```
-cmake ..
+cmake .
 ```
 Now run make
 ```
