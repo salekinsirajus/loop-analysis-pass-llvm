@@ -174,11 +174,13 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+static void CustomLoopAnalysis(Module *M){
+	/* Pseudo Code for Analysis Pass
 
-/* Pseudo Code for Analysis Pass
+		for each basic block
+			if it's a loop, find the loop body
+			find the branch instruction that goes back to either the header OR the preheader	
 
-	for each basic block
-		if it's a loop, find the loop body
-		find the branch instruction that goes back to either the header OR the preheader	
+	*/
 
-*/
+}

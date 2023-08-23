@@ -1,5 +1,10 @@
-# LLVM Optimization Pass: Loop Invariant Code Motion
-This is a class project for ECE566: Compiler Optimization and Scheduling at NC State
+# LLVM Analysis Pass: Loop 
+This pass analyzes and report a few aspects of a Loop. Specifically, this pass: 
+
+- Adds metadata to the IR branch instruction representing the back edge for each
+loop
+- Adds metadata to the IR instruction that generates the loop induction variable
+update used for loop termination check.
 
 ## Running Locally
 Build a docker container using the docker file provided.
