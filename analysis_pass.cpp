@@ -30,7 +30,7 @@
 
 using namespace llvm;
 
-static void LoopInvariantCodeMotion(Module *);
+static void CustomLoopAnalysis(Module *);
 
 static void summarize(Module *M);
 static void print_csv_file(std::string outputfile);
@@ -43,17 +43,17 @@ static cl::opt<std::string>
 
 static cl::opt<bool>
         Mem2Reg("mem2reg",
-                cl::desc("Perform memory to register promotion before LICM."),
+                cl::desc("Perform memory to register promotion before CLA."),
                 cl::init(false));
 
 static cl::opt<bool>
         CSE("cse",
-                cl::desc("Perform CSE before LICM."),
+                cl::desc("Perform CSE before CLA."),
                 cl::init(false));
 
 static cl::opt<bool>
-        NoLICM("no-licm",
-              cl::desc("Do not perform LICM optimization."),
+        NoCLA("no-licm",
+              cl::desc("Do not perform CLA optimization."),
               cl::init(false));
 
 static cl::opt<bool>
@@ -107,8 +107,8 @@ int main(int argc, char **argv) {
         Passes.run(*M.get());
     }
 
-    if (!NoLICM) {
-        LoopInvariantCodeMotion(M.get());
+    if (!NoCLA) {
+        CustomLoopAnalysis(M.get());
     }
 
     // Collect statistics on Module
@@ -169,26 +169,16 @@ static void print_csv_file(std::string outputfile)
 }
 
 static llvm::Statistic NumLoops = {"", "NumLoops", "number of loops analyzed"};
-static llvm::Statistic LICMBasic = {"", "LICMBasic", "basic loop invariant instructions"};
-static llvm::Statistic LICMLoadHoist = {"", "LICMLoadHoist", "loop invariant load instructions"};
-static llvm::Statistic LICMNoPreheader = {"", "LICMNoPreheader", "absence of preheader prevents optimization"};
+static llvm::Statistic CLANoPreheader = {"", "CLANoPreheader", "absence of preheader prevents optimization"};
 static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loops that has no Store instructions"};
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
-static llvm::Statistic NumLoopsNoStoreWithLoad = {"", "NumLoopsNoStoreWithLoad", "subset of loops with no stores that also have at least one load."};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
 
-/* Pseudo Code for Mem2Reg
+/* Pseudo Code for Analysis Pass
 
-for each alloca instruction, a:
- for each use of a, u:
- 	if u is not the address operand of a load or a store:
- 		skip a 
- bb = LLVMGetInstructionParent(a)
- for each use of a, u:
- 	if u is a store instruction:
- 		if no phi for a in DomFrontier(u):
- 			place a phi in DomFrontier(u)
- Rename(a, bb, undef) 
+	for each basic block
+		if it's a loop, find the loop body
+		find the branch instruction that goes back to either the header OR the preheader	
 
 */
