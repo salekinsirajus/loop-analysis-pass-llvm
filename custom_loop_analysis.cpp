@@ -13,17 +13,20 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Dominators.h"
 
@@ -177,18 +180,25 @@ static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops 
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
 static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
-	errs() << "add metadata to this function\n";
-    //for (auto I : BB){
-    int counter = 0;
     for (BasicBlock::iterator I = BB->begin(); I != BB->end(); ++I){
-        counter++;
+        //counter++;
         Instruction &i = *I;
         if (isa<BranchInst>(i)){
 
-            MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, std::to_string(counter)));
-            i.setMetadata("stats.instNumber", N);
+            // we can only add lineno and filename if debug is enabled
+            std::string metadata="cla";
+            if (DILocation *Loc = i.getDebugLoc()) {
+              unsigned Line = Loc->getLine();
 
-            errs() << "this is a branch instrcution " << i << "\n";
+              StringRef File = Loc->getFilename();
+              metadata = formatv("cla: {0}:{1}", File.str(), Line);
+            }
+            
+            MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, metadata));
+            //MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, std::to_string(counter)));
+            i.setMetadata("backedge: ", N);
+
+            errs() << i << "\n";
         }
     }
 }
@@ -219,11 +229,10 @@ static void CustomLoopAnalysis(Module *M){
 
         for(auto li: *LI) {
             NumLoops++;
-            errs() << "Loop Header: " << li->getHeader()->getName() << "\n";
+            //errs() << "Loop Header: " << li->getHeader()->getName() << "\n";
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
-                    errs() << "Basic Block " << pred->getName() << "is a back edeg\n";
-		                AddMetadataToBackEdge(Context, pred);
+		            AddMetadataToBackEdge(Context, pred);
                 }
             }
         }
