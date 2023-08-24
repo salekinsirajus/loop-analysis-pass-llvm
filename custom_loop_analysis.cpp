@@ -115,6 +115,7 @@ int main(int argc, char **argv) {
     summarize(M.get());
     print_csv_file(OutputFilename);
 
+    Verbose=1;
     if (Verbose)
         PrintStatistics(errs());
 
@@ -182,5 +183,25 @@ static void CustomLoopAnalysis(Module *M){
 			find the branch instruction that goes back to either the header OR the preheader	
 
 	*/
+    //Making sure the stat is working
 
+    for (Module::iterator func = M->begin(); func != M->end(); ++func){
+        Function &F = *func;
+        // for empty function, stop considering
+        if (func->begin() == func->end()){
+            continue;
+        }
+
+        DominatorTreeBase<BasicBlock,false> *DT=nullptr;
+        LoopInfoBase<BasicBlock,Loop> *LI = new LoopInfoBase<BasicBlock,Loop>();
+        DT = new DominatorTreeBase<BasicBlock,false>();
+
+        DT->recalculate(F); // dominance for Function, F
+        LI->analyze(*DT); // calculate loop info
+
+        for(auto li: *LI) {
+            NumLoops++;
+            //OptimizeLoop(&F, LI, li);
+        }
+    }
 }
