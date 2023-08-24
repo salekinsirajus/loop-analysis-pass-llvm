@@ -176,6 +176,22 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
+	errs() << "add metadata to this function\n";
+    //for (auto I : BB){
+    int counter = 0;
+    for (BasicBlock::iterator I = BB->begin(); I != BB->end(); ++I){
+        counter++;
+        Instruction &i = *I;
+        if (isa<BranchInst>(i)){
+
+            MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, std::to_string(counter)));
+            i.setMetadata("stats.instNumber", N);
+
+            errs() << "this is a branch instrcution " << i << "\n";
+        }
+    }
+}
 
 static void CustomLoopAnalysis(Module *M){
 	/* Pseudo Code for Analysis Pass
@@ -187,6 +203,7 @@ static void CustomLoopAnalysis(Module *M){
 	*/
     DominatorTree *DT = nullptr;
     LoopInfo *LI = nullptr;
+    LLVMContext &Context = M->getContext();
 
     for (Module::iterator func = M->begin(); func != M->end(); ++func){
         Function &F = *func;
@@ -206,6 +223,7 @@ static void CustomLoopAnalysis(Module *M){
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
                     errs() << "Basic Block " << pred->getName() << "is a back edeg\n";
+		                AddMetadataToBackEdge(Context, pred);
                 }
             }
         }
