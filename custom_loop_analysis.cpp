@@ -97,6 +97,7 @@ int main(int argc, char **argv) {
     }
 
     // If requested, do some early optimizations
+    
     if (Mem2Reg || CSE)
     {
         legacy::PassManager Passes;
@@ -175,6 +176,7 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+
 static void CustomLoopAnalysis(Module *M){
 	/* Pseudo Code for Analysis Pass
 
@@ -183,7 +185,8 @@ static void CustomLoopAnalysis(Module *M){
 			find the branch instruction that goes back to either the header OR the preheader	
 
 	*/
-    //Making sure the stat is working
+    DominatorTree *DT = nullptr;
+    LoopInfo *LI = nullptr;
 
     for (Module::iterator func = M->begin(); func != M->end(); ++func){
         Function &F = *func;
@@ -192,16 +195,19 @@ static void CustomLoopAnalysis(Module *M){
             continue;
         }
 
-        DominatorTreeBase<BasicBlock,false> *DT=nullptr;
+        
+        DT = new DominatorTree(F); // dominance for Function, F
         LoopInfoBase<BasicBlock,Loop> *LI = new LoopInfoBase<BasicBlock,Loop>();
-        DT = new DominatorTreeBase<BasicBlock,false>();
-
-        DT->recalculate(F); // dominance for Function, F
         LI->analyze(*DT); // calculate loop info
 
         for(auto li: *LI) {
             NumLoops++;
-            //OptimizeLoop(&F, LI, li);
+            errs() << "Loop Header: " << li->getHeader()->getName() << "\n";
+            for (BasicBlock *pred: predecessors(li->getHeader())){
+                if (li->contains(pred)){
+                    errs() << "Basic Block " << pred->getName() << "is a back edeg\n";
+                }
+            }
         }
     }
 }
