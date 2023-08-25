@@ -25,6 +25,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
@@ -100,16 +101,18 @@ int main(int argc, char **argv) {
     }
 
     // If requested, do some early optimizations
-    
-    if (Mem2Reg || CSE)
-    {
-        legacy::PassManager Passes;
-	if (Mem2Reg)
-	  Passes.add(createPromoteMemoryToRegisterPass());
-	if (CSE)
-	  Passes.add(createEarlyCSEPass());
-        Passes.run(*M.get());
+    legacy::PassManager Passes;
+    if (Mem2Reg || CSE){
+	if (Mem2Reg) Passes.add(createPromoteMemoryToRegisterPass());
+	if (CSE){
+	        Passes.add(createEarlyCSEPass());
+            Passes.run(*M.get());
+        }
     }
+
+    //experimental - running IndVarSimplify to get the correct Induction
+    //Variable
+    Passes.add(createIndVarSimplifyPass());
 
     if (!NoCLA) {
         CustomLoopAnalysis(M.get());
@@ -179,6 +182,54 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+//research if there is any function that will get the induction variable in
+//llvm8. if not implement one on your own.
+
+/*
+ *
+ * PHINode *Loop::getCanonicalInductionVariable() const {
+  BasicBlock *H = getHeader();
+
+  BasicBlock *Incoming = nullptr, *Backedge = nullptr;
+  pred_iterator PI = pred_begin(H);
+  assert(PI != pred_end(H) && "Loop must have at least one backedge!");
+  Backedge = *PI++;
+  if (PI == pred_end(H))
+    return nullptr; // dead loop
+  Incoming = *PI++;
+  if (PI != pred_end(H))
+    return nullptr; // multiple backedges?
+
+  if (contains(Incoming)) {
+    if (contains(Backedge))
+      return nullptr;
+    std::swap(Incoming, Backedge);
+  } else if (!contains(Backedge))
+    return nullptr;
+
+  // Loop over all of the PHI nodes, looking for a canonical indvar.
+  for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+    PHINode *PN = cast<PHINode>(I);
+    if (ConstantInt *CI =
+            dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming)))
+      if (CI->isZero())
+        if (Instruction *Inc =
+                dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
+          if (Inc->getOpcode() == Instruction::Add && Inc->getOperand(0) == PN)
+            if (ConstantInt *CI = dyn_cast<ConstantInt>(Inc->getOperand(1)))
+              if (CI->isOne())
+                return PN;
+  }
+  return nullptr;
+}
+ *
+ * */
+
+static void __addMD(LLVMContext &Ctx, Instruction *I){
+    MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, "canonical_ind_var"));
+    I->setMetadata("backedge: ", N);
+}
+
 static void AddMetaDataToInductionVar(BasicBlock *LoopHeader, BasicBlock *LoopLatch){
         ICmpInst *term_cond = nullptr; 
         if (BranchInst *BI = dyn_cast_or_null<BranchInst>(LoopLatch->getTerminator())){
@@ -200,7 +251,7 @@ static void AddMetaDataToInductionVar(BasicBlock *LoopHeader, BasicBlock *LoopLa
         //is this the primary induction variable?
         Instruction &i = *I;
         // The use of the update will be in a phi node
-        //errs() << "potential induction var " << i << "\n";
+        // so find all the phi nodes?
     }
 }
 
@@ -259,6 +310,7 @@ static void CustomLoopAnalysis(Module *M){
 
         for(auto li: *LI) {
             NumLoops++;
+            if (PHINode *ph = li->getCanonicalInductionVariable()){ __addMD(Context, ph); errs() << "found canindvar"<< ph << "\n";}
             //errs() << "Loop Header: " << li->getHeader()->getName() << "\n";
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
