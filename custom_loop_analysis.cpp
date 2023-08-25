@@ -179,6 +179,36 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+static void AddMetaDataToInductionVar(BasicBlock *LoopHeader, BasicBlock *LoopLatch){
+        ICmpInst *term_cond = nullptr; 
+        if (BranchInst *BI = dyn_cast_or_null<BranchInst>(LoopLatch->getTerminator())){
+            if (BI->isConditional()){
+                term_cond = dyn_cast<ICmpInst>(BI->getCondition()); 
+            }
+        }
+
+
+    /* Find the induction variable that determines loop exit*/
+    if (term_cond){
+        Value *LatchCmpOp0 = term_cond->getOperand(0);
+        errs() << "Op0 " << LatchCmpOp0 << "\n";
+        Value *LatchCmpOp1 = term_cond->getOperand(1);
+        errs() << "Op1 " << LatchCmpOp1 << "\n";
+    }
+
+    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I){
+        //is this the primary induction variable?
+        Instruction &i = *I;
+        // The use of the update will be in a phi node
+        //errs() << "potential induction var " << i << "\n";
+    }
+}
+
+static bool verifyLoopLatch(){
+    /*TODO*/
+    return false;
+}
+
 static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
     for (BasicBlock::iterator I = BB->begin(); I != BB->end(); ++I){
         //counter++;
@@ -198,7 +228,7 @@ static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
             //MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, std::to_string(counter)));
             i.setMetadata("backedge: ", N);
 
-            errs() << i << "\n";
+            //errs() << i << "\n";
         }
     }
 }
@@ -208,7 +238,7 @@ static void CustomLoopAnalysis(Module *M){
 
 		for each basic block
 			if it's a loop, find the loop body
-			find the branch instruction that goes back to either the header OR the preheader	
+			find the branch instruction that goes back to the header	
 
 	*/
     DominatorTree *DT = nullptr;
@@ -233,6 +263,7 @@ static void CustomLoopAnalysis(Module *M){
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
 		            AddMetadataToBackEdge(Context, pred);
+                    AddMetaDataToInductionVar(li->getHeader(), pred);
                 }
             }
         }
