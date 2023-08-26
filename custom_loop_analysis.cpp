@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <fstream>
 
-#include "llvm-c/Core.h"
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -38,115 +37,36 @@
 
 using namespace llvm;
 
-static void CustomLoopAnalysis(Module *);
+static void CustomLoopAnalysis(Module &);
 
-static void summarize(Module *M);
-static void print_csv_file(std::string outputfile);
+struct LoopMetaDataPass : public llvm::ModulePass {
 
-static cl::opt<std::string>
-        InputFilename(cl::Positional, cl::desc("<input bitcode>"), cl::Required, cl::init("-"));
+    static char ID;
+    LoopMetaDataPass() : ModulePass(ID) {}
 
-static cl::opt<std::string>
-        OutputFilename(cl::Positional, cl::desc("<output bitcode>"), cl::Required, cl::init("out.bc"));
+	void getAnalysisUsage(llvm::AnalysisUsage &AU) const override {
+	    AU.setPreservesAll(); // Preserve module functionality
+	    // Add any required analysis passes here using AU.addRequired<PassType>();
+	}
+    bool runOnModule(llvm::Module &M) override {
+        CustomLoopAnalysis(M);
 
-static cl::opt<bool>
-        Mem2Reg("mem2reg",
-                cl::desc("Perform memory to register promotion before CLA."),
-                cl::init(false));
-
-static cl::opt<bool>
-        CSE("cse",
-                cl::desc("Perform CSE before CLA."),
-                cl::init(false));
-
-static cl::opt<bool>
-        NoCLA("no-licm",
-              cl::desc("Do not perform CLA optimization."),
-              cl::init(false));
-
-static cl::opt<bool>
-        Verbose("verbose",
-                    cl::desc("Verbose stats."),
-                    cl::init(false));
-
-static cl::opt<bool>
-        NoCheck("no",
-                cl::desc("Do not check for valid IR."),
-                cl::init(false));
-
-int main(int argc, char **argv) {
-    // Parse command line arguments
-    cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
-
-    // Handle creating output files and shutting down properly
-    llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
-    LLVMContext Context;
-
-    // LLVM idiom for constructing output file.
-    std::unique_ptr<ToolOutputFile> Out;
-    std::string ErrorInfo;
-    std::error_code EC;
-    Out.reset(new ToolOutputFile(OutputFilename.c_str(), EC,
-                                 sys::fs::OF_None));
-
-    EnableStatistics();
-
-    // Read in module
-    SMDiagnostic Err;
-    std::unique_ptr<Module> M;
-    M = parseIRFile(InputFilename, Err, Context);
-
-    // If errors, fail
-    if (M.get() == 0)
-    {
-        Err.print(argv[0], errs());
-        //FIXME: there is a segmentation fault
-        return 1;
+        return false; //does not modify the IR
     }
 
-    // If requested, do some early optimizations
-    legacy::PassManager Passes;
-    if (Mem2Reg || CSE){
-	if (Mem2Reg) Passes.add(createPromoteMemoryToRegisterPass());
-	if (CSE){
-	        Passes.add(createEarlyCSEPass());
-            Passes.run(*M.get());
-        }
-    }
+};
 
-    //experimental - running IndVarSimplify to get the correct Induction
+//-----------------------------------------------------------------------------
+// Legacy PM Registration
+//-----------------------------------------------------------------------------
+// The address of this variable is used to identify the pass. The actual value
+// doesn't matter.
+char LoopMetaDataPass::ID = 0;
 
-    //Passes.add(createIndVarSimplifyPass());
+static RegisterPass<LoopMetaDataPass> X("loop-metadata", "loop-metadata",
+                             false /* Only looks at CFG */,
+                             false /* Analysis Pass */);
 
-    Passes.add(createPromoteMemoryToRegisterPass());
-    Passes.add(createLoopSimplifyPass());
-
-    if (!NoCLA) {
-        CustomLoopAnalysis(M.get());
-    }
-
-    // Collect statistics on Module
-    summarize(M.get());
-    print_csv_file(OutputFilename);
-
-    Verbose=1;
-    if (Verbose)
-        PrintStatistics(errs());
-
-    // Verify integrity of Module, do this by default
-    if (!NoCheck)
-    {
-        legacy::PassManager Passes;
-        Passes.add(createVerifierPass());
-        Passes.run(*M.get());
-    }
-
-    // Write final bitcode
-    WriteBitcodeToFile(*M.get(), Out->os());
-    Out->keep();
-
-    return 0;
-}
 
 static llvm::Statistic nFunctions = {"", "Functions", "number of functions"};
 static llvm::Statistic nInstructions = {"", "Instructions", "number of instructions"};
@@ -173,15 +93,6 @@ static void summarize(Module *M) {
     }
 }
 
-static void print_csv_file(std::string outputfile)
-{
-    std::ofstream stats(outputfile + ".stats");
-    auto a = GetStatistics();
-    for (auto p : a) {
-        stats << p.first.str() << "," << p.second << std::endl;
-    }
-    stats.close();
-}
 
 static llvm::Statistic NumLoops = {"", "NumLoops", "number of loops analyzed"};
 static llvm::Statistic CLANoPreheader = {"", "CLANoPreheader", "absence of preheader prevents optimization"};
@@ -211,40 +122,9 @@ static bool CollectInductionVariables(Loop *L, PredicatedScalarEvolution *PSE){
         Instruction &i = *I;
         if (i.isBinaryOp()){
             const SCEV *se = PSE->getSCEV(i.getOperand(0));
+            }
         }
-    }
 
-    /*
-
-      BasicBlock *H = L->getHeader(); 
-      BasicBlock *Incoming = nullptr, *Backedge = nullptr;
-      pred_iterator PI = pred_begin(H);
-      assert(PI != pred_end(H) && "Loop must have at least one backedge!");
-      Backedge = *PI++;
-      if (PI == pred_end(H))
-        errs() << "dead loop\n" ;
-        return false; // dead loop
-      Incoming = *PI++;
-      if (PI != pred_end(H))
-        errs() << "multiple backedges\n";
-        return false;
-
-      // Loop over all of the PHI nodes, looking for a canonical indvar.
-      SmallVector<Instruction *, 16> Worklist; 
-      for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
-        PHINode *PN = cast<PHINode>(I);
-
-        if (ConstantInt *CI = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming))){
-            if (Instruction *Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge))){
-              if (Inc->isBinaryOp()){
-                    Worklist.push_back(PN);
-                    errs() << "potential induction var" << PN << "\n";
-              }
-           }
-        }
-      }
-    */
-      
       return false;
 }
 
@@ -264,39 +144,6 @@ static void getLoopExitBlocks(Loop *L, SmallVector<BasicBlock*, 16> &ExitingBBs)
     }
 
     return;
-
-    /*
-    BasicBlock *ExitingBB = nullptr;
-    for (auto *ExitingBB: ExitingBBs){
-        errs() << "Considering Exiting BB " << ExitingBB << "\n";    
-        auto *BI = dyn_cast<BranchInst>(ExitingBB->getTerminator());
-        if (!BI)
-            Changed = true;
-            continue;
-        assert(BI->isConditional() && "exit branch must be conditional");
-
-        auto *ICmp = dyn_cast<ICmpInst>(BI->getCondition());
-        if (!ICmp || !ICmp->hasOneUse())
-            Changed = true;
-            continue;
-
-        auto *LHS = ICmp->getOperand(0);
-        auto *RHS = ICmp->getOperand(1);
-        // For the range reasoning, avoid computing SCEVs in the loop to avoid
-        // poisoning cache with sub-optimal results.  For the must-execute case,
-        // this is a neccessary precondition for correctness.
-        if (!L->isLoopInvariant(RHS)) {
-          if (!L->isLoopInvariant(LHS))
-            Changed = true;
-            continue;
-          // Same logic applies for the inverse case
-          std::swap(LHS, RHS);
-        }
-
-        ExitingBBs.push_back(ExitingBB);
-    }
-    */
-
 }
 
 static bool isAnExitBlock(BasicBlock *BB, SmallVector<BasicBlock *, 16> &ExitBlocks) {
@@ -357,18 +204,6 @@ static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L)
         errs() << "Considering an Alloca instruction\n"; 
         //see if this alloca is used as an induction variable
         if (I->use_empty()) return false;
-        /*
-        for (Value *au : I->uses()){
-            Instruction *aui = dyn_cast_or_null<Instruction>(au);
-            errs() << "Use of alloca " << *aui << "\n";
-            if (aui->getOpcode() != Instruction::Alloca){
-                if (isInductionVariableUpdate(Ctx, aui, L)) {
-                    desired = aui;
-                    break;
-                }
-            }
-        }
-        */
     }
 
     else if (I->getOpcode() == Instruction::Load){
@@ -483,13 +318,13 @@ static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
     }
 }
 
-static void CustomLoopAnalysis(Module *M){
+static void CustomLoopAnalysis(Module &M){
     DominatorTree *DT = nullptr;
     LoopInfo *LI = nullptr;
-    LLVMContext &Context = M->getContext();
+    LLVMContext &Context = M.getContext();
     PredicatedScalarEvolution *PSE;
 
-    for (Module::iterator func = M->begin(); func != M->end(); ++func){
+    for (Module::iterator func = M.begin(); func != M.end(); ++func){
         Function &F = *func;
         // for empty function, stop considering
         if (func->begin() == func->end()){
@@ -509,8 +344,8 @@ static void CustomLoopAnalysis(Module *M){
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
 		            AddMetadataToBackEdge(Context, pred);
+                    }
                 }
             }
         }
     }
-}

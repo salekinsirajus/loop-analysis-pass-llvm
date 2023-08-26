@@ -1,4 +1,4 @@
-# LLVM Analysis Pass: Loop 
+# LLVM Analysis Pass: Loop Metadata
 This pass analyzes and report a few aspects of a Loop. Specifically, this pass: 
 
 - Adds metadata to the IR branch instruction representing the back edge for each
@@ -6,24 +6,24 @@ loop
 - Adds metadata to the IR instruction that generates the loop induction variable
 update used for loop termination check.
 
-## Acceptance Criteria
-3. All Metadata should include corresponding filename and line number in the C++ code
-4. Test case may include 2 or 3 level embedded loops as well as multiple loops at same
-level.
-5. Pass source code should be compilable at our end using llvm 8.0 version.
-6. The pass should define any dependencies on other passes automatically. It is not
-expected that we run multiple llvm clang and/or opt passes prior to running this pass.
-The output of the pass is an .ll file. It is expected that this Meta-data annotated IR should
-be able to compile to executable and be functional. There should be no functional
-difference in executable when compiled with and without this pass.
+## Build From Source
+1. Locate the directory where the source file is (make sure `CMakeLists.txt` is
+   there)
+2. Create a new directory with `mkdir build` and go in there `cd build`
+3. Build the pass (while in `build`)
+```
+cmake ..
+```
+4. Assuming you have an input file called `test.bc`, you can run the following:
+```
+opt -load /ece566/build/libLoopMetaDataPass.so -loop-metadata -disable-output test.bc 
+```
 
-## Running Locally
+## Use the Docker Cotnainer
 Build a docker container using the docker file provided.
 ```
 docker build -t llvmp3:latest .
 ```
-
-### Build Executable
 Get into the docker container
 ```
 docker run -v $(pwd):/ece566 -it llvmp3:latest /bin/bash
@@ -39,36 +39,4 @@ cmake .
 Now run make
 ```
 make
-```
-
-## Building Test
-Create a test directory in the root folder and `cd` into it
-```
-mkdir test
-cd test
-```
-Configure the benchmark tool to find the executable that we built earlier
-```
-/ece566/wolfbench/wolfbench/configure --enable-customtool=/ece566/build/p3
-```
-
-## Running Test
-while you are in the `test` directory, run the following command to compile
-all the benchmark.
-```
-make all test
-```
-To ensure that our optimization pass did not break things, run the following:
-```
-make test compare
-```
-
-## Manual Test
-Let's say you have a file named `test.c`
-
-```
-/usr/bin/clang-8 -O0 -Xclang -disable-O0-optnone -w -std=c89 -emit-llvm -c -o test.bc test.c
-/usr/bin/llvm-link-8 -o test.link.bc test.bc
-/usr/bin/opt-8  -o test.opt.bc test.link.bc
-./cla  test.opt.bc test.tune.bc
 ```

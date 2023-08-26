@@ -1,2 +1,0 @@
-(make-array a 100 1)
-(+ (aref a 5) (aref a 6))

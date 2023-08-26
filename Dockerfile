@@ -1,4 +1,4 @@
-# ECE 466/566 container for easy use on Windows, Linux, MacOS
+# Dockerfile for a quickstart 
 
 FROM ubuntu:20.04
 
@@ -40,9 +40,9 @@ RUN apt-get install -y time \
 RUN apt install -y python3-pip
 RUN pip3 install lit
 
-ADD . /ece566
+ADD . /llvmpass
 ADD . /build
-WORKDIR /ece566
+WORKDIR /llvmpass
 
 RUN ( \
     echo 'LogLevel DEBUG2'; \
@@ -55,6 +55,6 @@ RUN ( \
 RUN useradd -m user \
   && yes password | passwd user
 
-COPY . /ece566
+COPY . /llvmpass
 COPY .vimrc /root/.vimrc
 CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/ssh/sshd_config_test_clion"]

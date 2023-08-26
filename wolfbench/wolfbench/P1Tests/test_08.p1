@@ -1,1 +1,0 @@
-(+ arg_size (aref arg_array 0))
