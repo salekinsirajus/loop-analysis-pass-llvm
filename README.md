@@ -62,3 +62,13 @@ To ensure that our optimization pass did not break things, run the following:
 ```
 make test compare
 ```
+
+## Manual Test
+Let's say you have a file named `test.c`
+
+```
+/usr/bin/clang-8 -O0 -Xclang -disable-O0-optnone -w -std=c89 -emit-llvm -c -o test.bc test.c
+/usr/bin/llvm-link-8 -o test.link.bc test.bc
+/usr/bin/opt-8  -o test.opt.bc test.link.bc
+./cla  test.opt.bc test.tune.bc
+```

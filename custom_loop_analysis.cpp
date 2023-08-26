@@ -1,9 +1,9 @@
-#include <fstream>
 #include <memory>
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fstream>
 
 #include "llvm-c/Core.h"
 
@@ -13,19 +13,27 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Dominators.h"
+
 
 
 using namespace llvm;
@@ -97,15 +105,21 @@ int main(int argc, char **argv) {
     }
 
     // If requested, do some early optimizations
-    if (Mem2Reg || CSE)
-    {
-        legacy::PassManager Passes;
-	if (Mem2Reg)
-	  Passes.add(createPromoteMemoryToRegisterPass());
-	if (CSE)
-	  Passes.add(createEarlyCSEPass());
-        Passes.run(*M.get());
+    legacy::PassManager Passes;
+    if (Mem2Reg || CSE){
+	if (Mem2Reg) Passes.add(createPromoteMemoryToRegisterPass());
+	if (CSE){
+	        Passes.add(createEarlyCSEPass());
+            Passes.run(*M.get());
+        }
     }
+
+    //experimental - running IndVarSimplify to get the correct Induction
+
+    //Passes.add(createIndVarSimplifyPass());
+
+    Passes.add(createPromoteMemoryToRegisterPass());
+    Passes.add(createLoopSimplifyPass());
 
     if (!NoCLA) {
         CustomLoopAnalysis(M.get());
@@ -175,15 +189,322 @@ static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loop
 static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
+static void __addMD(LLVMContext &Ctx, Instruction *I){
+    std::string metadata;
+
+    if (DILocation *Loc = I->getDebugLoc()) {
+      unsigned Line = Loc->getLine();
+
+      StringRef File = Loc->getFilename();
+      metadata = formatv("{0}:{1}", File.str(), Line);
+
+      MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, "canonical_ind_var"));
+      I->setMetadata("IndVarUpdateInst:", N);
+    }
+}
+
+
+static bool CollectInductionVariables(Loop *L, PredicatedScalarEvolution *PSE){
+    BasicBlock *LoopHeader = L->getHeader();
+
+    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I) {
+        Instruction &i = *I;
+        if (i.isBinaryOp()){
+            const SCEV *se = PSE->getSCEV(i.getOperand(0));
+        }
+    }
+
+    /*
+
+      BasicBlock *H = L->getHeader(); 
+      BasicBlock *Incoming = nullptr, *Backedge = nullptr;
+      pred_iterator PI = pred_begin(H);
+      assert(PI != pred_end(H) && "Loop must have at least one backedge!");
+      Backedge = *PI++;
+      if (PI == pred_end(H))
+        errs() << "dead loop\n" ;
+        return false; // dead loop
+      Incoming = *PI++;
+      if (PI != pred_end(H))
+        errs() << "multiple backedges\n";
+        return false;
+
+      // Loop over all of the PHI nodes, looking for a canonical indvar.
+      SmallVector<Instruction *, 16> Worklist; 
+      for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+        PHINode *PN = cast<PHINode>(I);
+
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming))){
+            if (Instruction *Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge))){
+              if (Inc->isBinaryOp()){
+                    Worklist.push_back(PN);
+                    errs() << "potential induction var" << PN << "\n";
+              }
+           }
+        }
+      }
+    */
+      
+      return false;
+}
+
+static void getLoopExitBlocks(Loop *L, SmallVector<BasicBlock*, 16> &ExitingBBs){
+    L->getExitingBlocks(ExitingBBs);
+
+    for (auto it = ExitingBBs.begin(); it != ExitingBBs.end();) {
+        auto *BI = dyn_cast<BranchInst>((*it)->getTerminator());
+        if (!BI || (!BI->isConditional())){
+            it = ExitingBBs.erase(it);
+       
+        } else {
+            // If the item meets the criteria, move to the next item
+            errs() << "considering exit block " << (*it) << "\n";
+            ++it;
+        }
+    }
+
+    return;
+
+    /*
+    BasicBlock *ExitingBB = nullptr;
+    for (auto *ExitingBB: ExitingBBs){
+        errs() << "Considering Exiting BB " << ExitingBB << "\n";    
+        auto *BI = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+        if (!BI)
+            Changed = true;
+            continue;
+        assert(BI->isConditional() && "exit branch must be conditional");
+
+        auto *ICmp = dyn_cast<ICmpInst>(BI->getCondition());
+        if (!ICmp || !ICmp->hasOneUse())
+            Changed = true;
+            continue;
+
+        auto *LHS = ICmp->getOperand(0);
+        auto *RHS = ICmp->getOperand(1);
+        // For the range reasoning, avoid computing SCEVs in the loop to avoid
+        // poisoning cache with sub-optimal results.  For the must-execute case,
+        // this is a neccessary precondition for correctness.
+        if (!L->isLoopInvariant(RHS)) {
+          if (!L->isLoopInvariant(LHS))
+            Changed = true;
+            continue;
+          // Same logic applies for the inverse case
+          std::swap(LHS, RHS);
+        }
+
+        ExitingBBs.push_back(ExitingBB);
+    }
+    */
+
+}
+
+static bool isAnExitBlock(BasicBlock *BB, SmallVector<BasicBlock *, 16> &ExitBlocks) {
+    for (auto it = ExitBlocks.begin(); it != ExitBlocks.end(); ++it) {
+        if (BB == *it) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool CompareInstDeterminesLoopExitCondition(Instruction *I, Loop *L, SmallVector<BasicBlock*, 16> &ExitBlocks){
+    // go through all the exit blocks and see if the compare instruction
+    // determines the exits. Some exiting BB's won't be eligible 
+    if (I->use_empty()) return false;
+
+   for (User *U : I->users()) {
+        if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
+            // Check if the user instruction is in the loop's exit blocks
+            if (isAnExitBlock(UserInst->getParent(), ExitBlocks)) {
+                errs() << "Use: " << *UserInst << "\n";
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L){
+    //it is a binary op 
+    //it is either Add, Sub
+    // is a canonical induction update
+    errs() << "isInductionVariable " << *I << "\n";
+    Value *op0, *op1;
+    
+    Instruction *desired = nullptr;
+    if (I->getOpcode() == Instruction::Add) {
+        op0 = I->getOperand(0);
+        op1 = I->getOperand(1);
+
+        errs() << "found an add " << I << "\n";
+        if (L->isLoopInvariant(op0) || L->isLoopInvariant(op1)){
+            errs() << "Found the instruction! " << *I << "\n";
+            desired = I;
+        }
+
+    }
+    else if (I->getOpcode() == Instruction::Sub){
+       errs() << "found an Sub" << I << "\n";
+        return false;
+    }
+    else if (I->getOpcode() == Instruction::Mul){
+       errs() << "found an Mul" << I << "\n";
+        return false;
+    }
+
+    else if (I->getOpcode() == Instruction::Alloca){
+        errs() << "Considering an Alloca instruction\n"; 
+        //see if this alloca is used as an induction variable
+        if (I->use_empty()) return false;
+        /*
+        for (Value *au : I->uses()){
+            Instruction *aui = dyn_cast_or_null<Instruction>(au);
+            errs() << "Use of alloca " << *aui << "\n";
+            if (aui->getOpcode() != Instruction::Alloca){
+                if (isInductionVariableUpdate(Ctx, aui, L)) {
+                    desired = aui;
+                    break;
+                }
+            }
+        }
+        */
+    }
+
+    else if (I->getOpcode() == Instruction::Load){
+        errs() << "Considering a Load instruction\n"; 
+        if (LoadInst *L = dyn_cast<LoadInst>(I)){
+            if (L->isVolatile()) return false;
+        }
+
+
+        if (GlobalVariable *globalVar = dyn_cast<GlobalVariable>(I->getOperand(0))) {
+//            if (!globalVar->hasDefinitiveInitializer()){
+                return false;
+//            }
+        }
+
+        Instruction *LoadPointerOperand = dyn_cast_or_null<Instruction>(I->getOperand(0));
+        if (LoadPointerOperand->use_empty()) return false;
+
+        for (User *U : LoadPointerOperand->users()) {
+            errs() <<"===considering load's usage " << U <<"\n";
+            if (StoreInst *Store = dyn_cast_or_null<StoreInst>(U)) {
+                Value *StorePointerOperand = Store->getPointerOperand();
+                if (LoadPointerOperand == StorePointerOperand) {
+                    errs() << "Found a Load and Store accessing the same memory address " << *Store << "\n";
+                        //what are you storing? 
+                        Value *StoreValueOp = Store->getValueOperand();
+                        if (Instruction *StoreValue = dyn_cast_or_null<Instruction>(StoreValueOp)){
+                            if (isInductionVariableUpdate(Ctx, StoreValue, L)){
+                                desired = StoreValue;         
+                                break;
+                            }
+                        }    
+                    }
+                }
+            }
+        }
+    if (desired){
+        __addMD(Ctx, desired);
+        return true;
+    } 
+    return false;
+
+}
+
+static void FindIndVarUpdateCandidates(LLVMContext &Ctx, Loop *L, SmallVector<BasicBlock*, 16> &ExitBlocks){
+    BasicBlock *LoopLatch = L->getLoopLatch();
+    BasicBlock *LoopHeader = L->getHeader();
+
+    //go through all the instructions in the header
+    //the terminating condition will contain a use of an update
+    
+    SmallVector<Instruction *, 16> NonConstOps; 
+    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I){
+        Instruction &i = *I;
+
+        if (isa<CmpInst>(i) && CompareInstDeterminesLoopExitCondition(&i, L, ExitBlocks)){ // AND it determines loop exit
+            Value *LatchCmpOp0 = i.getOperand(0);
+            Instruction *i0 = dyn_cast_or_null<Instruction>(LatchCmpOp0);
+
+            if (i0){
+                if (!isa<Constant>(i0)){
+                    if (L->contains(i0->getParent())){
+                        NonConstOps.push_back(i0);
+                    }
+                }
+            }
+
+            Value *LatchCmpOp1 = i.getOperand(1);
+            Instruction *i1 = dyn_cast_or_null<Instruction>(LatchCmpOp1);
+
+            if (i1){
+                if (!isa<Constant>(i1)){
+                    if (L->contains(i1->getParent())){
+                        NonConstOps.push_back(i1);
+                    }
+                }
+            } 
+        }
+    }
+
+    if (NonConstOps.empty()){
+        errs() << "FOUND NO UPDATE VAR\n";
+    } else {
+        errs() << "found some instruction to consider as ind var\n";
+    }
+
+    for (auto *inst: NonConstOps){
+        if (isInductionVariableUpdate(Ctx, inst, L)){
+            return;
+        }
+    }
+}
+
+
+static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
+    for (BasicBlock::iterator I = BB->begin(); I != BB->end(); ++I){
+        Instruction &i = *I;
+        if (isa<BranchInst>(i)){
+
+            // we can only add lineno and filename if debug is enabled
+            std::string metadata="cla";
+            if (DILocation *Loc = i.getDebugLoc()) {
+              unsigned Line = Loc->getLine();
+
+              StringRef File = Loc->getFilename();
+              metadata = formatv("cla: {0}:{1}", File.str(), Line);
+            }
+            
+            MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, metadata));
+            i.setMetadata("backedge: ", N);
+        }
+    }
+}
+
+static void AnalyzeLoop(Loop *L, LLVMContext &Context, DominatorTree *DT){
+    NumLoops++;
+    for (auto subloop: L->getSubLoops()){
+       AnalyzeLoop(subloop, Context, DT);
+    }
+
+    SmallVector<BasicBlock *, 16> ExitBlocks; 
+    getLoopExitBlocks(L, ExitBlocks);
+    FindIndVarUpdateCandidates(Context, L, ExitBlocks);
+
+    for (BasicBlock *pred: predecessors(L->getHeader())){
+        if (L->contains(pred)){
+            AddMetadataToBackEdge(Context, pred);
+        }
+    }
+}
+
 static void CustomLoopAnalysis(Module *M){
-	/* Pseudo Code for Analysis Pass
-
-		for each basic block
-			if it's a loop, find the loop body
-			find the branch instruction that goes back to either the header OR the preheader	
-
-	*/
-    //Making sure the stat is working
+    DominatorTree *DT = nullptr;
+    LoopInfo *LI = nullptr;
+    LLVMContext &Context = M->getContext();
+    PredicatedScalarEvolution *PSE;
 
     for (Module::iterator func = M->begin(); func != M->end(); ++func){
         Function &F = *func;
@@ -192,16 +513,12 @@ static void CustomLoopAnalysis(Module *M){
             continue;
         }
 
-        DominatorTreeBase<BasicBlock,false> *DT=nullptr;
+        DT = new DominatorTree(F); // dominance for Function, F
         LoopInfoBase<BasicBlock,Loop> *LI = new LoopInfoBase<BasicBlock,Loop>();
-        DT = new DominatorTreeBase<BasicBlock,false>();
-
-        DT->recalculate(F); // dominance for Function, F
         LI->analyze(*DT); // calculate loop info
 
         for(auto li: *LI) {
-            NumLoops++;
-            //OptimizeLoop(&F, LI, li);
+            AnalyzeLoop(li, Context, DT);
         }
     }
 }
