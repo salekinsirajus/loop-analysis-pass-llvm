@@ -8,31 +8,20 @@
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/FormatVariadic.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Analysis/InstructionSimplify.h"
-#include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Transforms/Scalar/IndVarSimplify.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Dominators.h"
-
 
 
 using namespace llvm;
