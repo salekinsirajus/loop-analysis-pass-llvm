@@ -16,25 +16,26 @@ cmake ..
 ```
 4. Assuming you have an input file called `test.bc`, you can run the following:
 ```
-opt -load /ece566/build/libLoopMetaDataPass.so -loop-metadata -disable-output test.bc 
+/usr/bin/opt-8 -load /llvmpass/build/libLoopMetaDataPass.so -loop-metadata -disable-output test.bc 
 ```
 
 ## Use the Docker Cotnainer
 Build a docker container using the docker file provided.
 ```
-docker build -t llvmp3:latest .
+docker build -t llvmdocker:latest .
 ```
 Get into the docker container
 ```
-docker run -v $(pwd):/ece566 -it llvmp3:latest /bin/bash
+docker run -v $(pwd):/llvmpass -it llvmdocker:latest /bin/bash
 ```
-Create a build directory
+Create a build directory, go in there
 ```
 mkdir build
+cd build
 ```
 Run cmake
 ```
-cmake .
+cmake ..
 ```
 Now run make
 ```
