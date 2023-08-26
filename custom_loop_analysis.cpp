@@ -1,4 +1,3 @@
-#            //errs() << "Loop Header: " << li->getHeader()->getName() << "\n";include <fstream>
 #include <memory>
 #include <algorithm>
 #include <stdio.h>
@@ -22,16 +21,19 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Dominators.h"
+
 
 
 using namespace llvm;
@@ -114,7 +116,9 @@ int main(int argc, char **argv) {
 
     //experimental - running IndVarSimplify to get the correct Induction
 
-    Passes.add(createIndVarSimplifyPass());
+    //Passes.add(createIndVarSimplifyPass());
+
+    Passes.add(createPromoteMemoryToRegisterPass());
     Passes.add(createLoopSimplifyPass());
 
     if (!NoCLA) {
@@ -186,40 +190,33 @@ static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops 
 static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
 static void __addMD(LLVMContext &Ctx, Instruction *I){
-    MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, "canonical_ind_var"));
-    I->setMetadata("IndVarUpdate:", N);
-}
+    std::string metadata;
 
-static bool isInductionVariableUpdate(Instruction &I){
-    if (!I.isBinaryOp())
-    return false;
+    if (DILocation *Loc = I->getDebugLoc()) {
+      unsigned Line = Loc->getLine();
 
-    BinaryOperator *BinOp = dyn_cast<BinaryOperator>(&I);
-    Value *Op0 = BinOp->getOperand(0);
-    Value *Op1 = BinOp->getOperand(1);
+      StringRef File = Loc->getFilename();
+      metadata = formatv("{0}:{1}", File.str(), Line);
 
-    // Check if Op0 is loop invariant and Op1 is a constant
-    if (!dyn_cast<ConstantInt>(Op1))
-        return false;
-
-    // Additional checks can be added based on specific patterns
-    // For example, you can check for multiplication and division as well
-
-    return true;
-}
-
-static bool CollectInductionVariables(BasicBlock *H, BasicBlock *LoopLatch){
-    /*
-    std::map<Value*, std::tuple<Value*, int, int> > IndVarMap;
-
-    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I){
-      if (PHINode *PN = dyn_cast<PHINode>(&I)) {
-        IndVarMap[&I] = std::make_tuple(&I, 1, 0);
-        errs() << "Adding induction variable " << PN << "\n";
-      }
+      MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, "canonical_ind_var"));
+      I->setMetadata("IndVarUpdateInst:", N);
     }
-    */
-      
+}
+
+
+static bool CollectInductionVariables(Loop *L, PredicatedScalarEvolution *PSE){
+    BasicBlock *LoopHeader = L->getHeader();
+
+    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I) {
+        Instruction &i = *I;
+        if (i.isBinaryOp()){
+            const SCEV *se = PSE->getSCEV(i.getOperand(0));
+        }
+    }
+
+    /*
+
+      BasicBlock *H = L->getHeader(); 
       BasicBlock *Incoming = nullptr, *Backedge = nullptr;
       pred_iterator PI = pred_begin(H);
       assert(PI != pred_end(H) && "Loop must have at least one backedge!");
@@ -239,72 +236,184 @@ static bool CollectInductionVariables(BasicBlock *H, BasicBlock *LoopLatch){
 
         if (ConstantInt *CI = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming))){
             if (Instruction *Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge))){
-              if (Inc->isBinaryOp() && Inc->getOperand(0) == PN){
-                if (ConstantInt *CI = dyn_cast<ConstantInt>(Inc->getOperand(1))){
+              if (Inc->isBinaryOp()){
                     Worklist.push_back(PN);
                     errs() << "potential induction var" << PN << "\n";
-                }
               }
            }
         }
       }
+    */
       
-      if (Worklist.empty()){
-        //loop induction variable is not a phi node.
-        // We get the terminal condition with the following code
-
-            ICmpInst *term_cond = nullptr; 
-            if (BranchInst *BI = dyn_cast_or_null<BranchInst>(LoopLatch->getTerminator())){
-                if (BI->isConditional()){
-                    term_cond = dyn_cast<ICmpInst>(BI->getCondition()); 
-                }
-            }
-
-        if (term_cond){
-            Value *LatchCmpOp0 = term_cond->getOperand(0);
-            errs() << "Op0 " << LatchCmpOp0 << "\n";
-            Value *LatchCmpOp1 = term_cond->getOperand(1);
-            errs() << "Op1 " << LatchCmpOp1 << "\n";
-            return true;
-        }
-        
-      } else {
-        errs() << "found a phi node that can be an induction variable\n";
-        return true;
-      }
-
-      errs() << "No Induction Variable found\n";
       return false;
 }
 
-static bool CompareInstDeterminesLoopExitCondition(Instruction *I, Loop *L){
-    BasicBlock *LoopLatch = L->getLoopLatch();
-    if (!LoopLatch){
-        errs() << "LoopLatch is empty???\n";
-        errs() << "instruction " << &I << "\n"; 
-        return false; //todo: should really try a different loop or something
-    
-    } 
-    Value* terminator = LoopLatch->getTerminator();
-    if (!terminator){
-        errs() << "terminator is empty???\n";
-        return false; //todo: should really try a different loop or something
-    }
-    //errs() << "terminator " << LoopLatch->getTerminator() << "\n";
-    //can you take the instruction and reach to the terminator? 
-    Instruction *term_inst = dyn_cast_or_null<Instruction>(LoopLatch->getTerminator());
-    if (term_inst){
-        //errs() << "term_inst " << term_inst << "\n";
-    } else {
-    
-        errs() << "term_inst cannot be cast into an instruction\n";
+static void getLoopExitBlocks(Loop *L, SmallVector<BasicBlock*, 16> &ExitingBBs){
+    L->getExitingBlocks(ExitingBBs);
+
+    for (auto it = ExitingBBs.begin(); it != ExitingBBs.end();) {
+        auto *BI = dyn_cast<BranchInst>((*it)->getTerminator());
+        if (!BI || (!BI->isConditional())){
+            it = ExitingBBs.erase(it);
+       
+        } else {
+            // If the item meets the criteria, move to the next item
+            errs() << "considering exit block " << (*it) << "\n";
+            ++it;
+        }
     }
 
+    return;
+
+    /*
+    BasicBlock *ExitingBB = nullptr;
+    for (auto *ExitingBB: ExitingBBs){
+        errs() << "Considering Exiting BB " << ExitingBB << "\n";    
+        auto *BI = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+        if (!BI)
+            Changed = true;
+            continue;
+        assert(BI->isConditional() && "exit branch must be conditional");
+
+        auto *ICmp = dyn_cast<ICmpInst>(BI->getCondition());
+        if (!ICmp || !ICmp->hasOneUse())
+            Changed = true;
+            continue;
+
+        auto *LHS = ICmp->getOperand(0);
+        auto *RHS = ICmp->getOperand(1);
+        // For the range reasoning, avoid computing SCEVs in the loop to avoid
+        // poisoning cache with sub-optimal results.  For the must-execute case,
+        // this is a neccessary precondition for correctness.
+        if (!L->isLoopInvariant(RHS)) {
+          if (!L->isLoopInvariant(LHS))
+            Changed = true;
+            continue;
+          // Same logic applies for the inverse case
+          std::swap(LHS, RHS);
+        }
+
+        ExitingBBs.push_back(ExitingBB);
+    }
+    */
+
+}
+
+static bool isAnExitBlock(BasicBlock *BB, SmallVector<BasicBlock *, 16> &ExitBlocks) {
+    for (auto it = ExitBlocks.begin(); it != ExitBlocks.end(); ++it) {
+        if (BB == *it) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool CompareInstDeterminesLoopExitCondition(Instruction *I, Loop *L, SmallVector<BasicBlock*, 16> &ExitBlocks){
+    // go through all the exit blocks and see if the compare instruction
+    // determines the exits. Some exiting BB's won't be eligible 
+    if (I->use_empty()) return false;
+
+   for (User *U : I->users()) {
+        if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
+            // Check if the user instruction is in the loop's exit blocks
+            if (isAnExitBlock(UserInst->getParent(), ExitBlocks)) {
+                errs() << "Use: " << *UserInst << "\n";
+            }
+        }
+    }
 
     return true;
 }
 
-static void FindInductionVariableUpdate(LLVMContext &Ctx, Loop *L){
+static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L){
+    //it is a binary op 
+    //it is either Add, Sub
+    // is a canonical induction update
+    errs() << "isInductionVariable " << *I << "\n";
+    Value *op0, *op1;
+    
+    Instruction *desired = nullptr;
+    if (I->getOpcode() == Instruction::Add) {
+        op0 = I->getOperand(0);
+        op1 = I->getOperand(1);
+
+        errs() << "found an add " << I << "\n";
+        if (L->isLoopInvariant(op0) || L->isLoopInvariant(op1)){
+            errs() << "Found the instruction! " << *I << "\n";
+            desired = I;
+        }
+
+    }
+    else if (I->getOpcode() == Instruction::Sub){
+       errs() << "found an Sub" << I << "\n";
+        return false;
+    }
+    else if (I->getOpcode() == Instruction::Mul){
+       errs() << "found an Mul" << I << "\n";
+        return false;
+    }
+
+    else if (I->getOpcode() == Instruction::Alloca){
+        errs() << "Considering an Alloca instruction\n"; 
+        //see if this alloca is used as an induction variable
+        if (I->use_empty()) return false;
+        /*
+        for (Value *au : I->uses()){
+            Instruction *aui = dyn_cast_or_null<Instruction>(au);
+            errs() << "Use of alloca " << *aui << "\n";
+            if (aui->getOpcode() != Instruction::Alloca){
+                if (isInductionVariableUpdate(Ctx, aui, L)) {
+                    desired = aui;
+                    break;
+                }
+            }
+        }
+        */
+    }
+
+    else if (I->getOpcode() == Instruction::Load){
+        errs() << "Considering a Load instruction\n"; 
+        if (LoadInst *L = dyn_cast<LoadInst>(I)){
+            if (L->isVolatile()) return false;
+        }
+
+
+        if (GlobalVariable *globalVar = dyn_cast<GlobalVariable>(I->getOperand(0))) {
+            if (!globalVar->hasDefinitiveInitializer()){
+                return false;
+            }
+        }
+
+        Instruction *LoadPointerOperand = dyn_cast_or_null<Instruction>(I->getOperand(0));
+        if (LoadPointerOperand->use_empty()) return false;
+
+        for (User *U : LoadPointerOperand->users()) {
+            errs() <<"===considering load's usage " << U <<"\n";
+            if (StoreInst *Store = dyn_cast_or_null<StoreInst>(U)) {
+                Value *StorePointerOperand = Store->getPointerOperand();
+                if (LoadPointerOperand == StorePointerOperand) {
+                    errs() << "Found a Load and Store accessing the same memory address " << *Store << "\n";
+                        //what are you storing? 
+                        Value *StoreValueOp = Store->getValueOperand();
+                        if (Instruction *StoreValue = dyn_cast_or_null<Instruction>(StoreValueOp)){
+                            if (isInductionVariableUpdate(Ctx, StoreValue, L)){
+                                desired = StoreValue;         
+                                break;
+                            }
+                        }    
+                    }
+                }
+            }
+        }
+    if (desired){
+        __addMD(Ctx, desired);
+        return true;
+    } 
+    return false;
+
+}
+
+static void FindIndVarUpdateCandidates(LLVMContext &Ctx, Loop *L, SmallVector<BasicBlock*, 16> &ExitBlocks){
     BasicBlock *LoopLatch = L->getLoopLatch();
     BasicBlock *LoopHeader = L->getHeader();
 
@@ -315,45 +424,44 @@ static void FindInductionVariableUpdate(LLVMContext &Ctx, Loop *L){
     for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I){
         Instruction &i = *I;
 
-        if (isa<CmpInst>(i) && CompareInstDeterminesLoopExitCondition(&i, L)){ // AND it determines loop exit
+        if (isa<CmpInst>(i) && CompareInstDeterminesLoopExitCondition(&i, L, ExitBlocks)){ // AND it determines loop exit
             Value *LatchCmpOp0 = i.getOperand(0);
-            //errs() << "Op0 " << LatchCmpOp0 << "\n";
             Instruction *i0 = dyn_cast_or_null<Instruction>(LatchCmpOp0);
-            //errs() << "Casted to instruction (op0) " << i0 << "\n";
+
             if (i0){
-            //    errs() << "NOT null value\n"; 
                 if (!isa<Constant>(i0)){
-            //        errs() << "NOT a constant int, adding to worklist\n";
-                    NonConstOps.push_back(i0);
+                    if (L->contains(i0->getParent())){
+                        NonConstOps.push_back(i0);
+                    }
                 }
-            } else { 
-           //     errs() << "a null value\n";
             }
 
             Value *LatchCmpOp1 = i.getOperand(1);
-            //errs() << "Op1 " << LatchCmpOp1 << "\n";
             Instruction *i1 = dyn_cast_or_null<Instruction>(LatchCmpOp1);
-            //errs() << "Casted to instruction (op1) " << i1 << "\n";
+
             if (i1){
-            //    errs() << "NOT null value\n"; 
                 if (!isa<Constant>(i1)){
-            //        errs() << "NOT a constant int, adding to worklist\n";
-                    NonConstOps.push_back(i1);
+                    if (L->contains(i1->getParent())){
+                        NonConstOps.push_back(i1);
+                    }
                 }
-            } else { 
-             //   errs() << "a null value\n";
-            }
+            } 
         }
     }
 
-    
+    if (NonConstOps.empty()){
+        errs() << "FOUND NO UPDATE VAR\n";
+    } else {
+        errs() << "found some instruction to consider as ind var\n";
+    }
+
+    for (auto *inst: NonConstOps){
+        if (isInductionVariableUpdate(Ctx, inst, L)){
+            return;
+        }
+    }
 }
 
-
-static bool verifyLoopLatch(){
-    /*TODO*/
-    return false;
-}
 
 static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
     for (BasicBlock::iterator I = BB->begin(); I != BB->end(); ++I){
@@ -375,21 +483,11 @@ static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
     }
 }
 
-static void GetInductionVariable(Loop *L){
-    return;
-}
-
 static void CustomLoopAnalysis(Module *M){
-	/* Pseudo Code for Analysis Pass
-
-		for each basic block
-			if it's a loop, find the loop body
-			find the branch instruction that goes back to the header	
-
-	*/
     DominatorTree *DT = nullptr;
     LoopInfo *LI = nullptr;
     LLVMContext &Context = M->getContext();
+    PredicatedScalarEvolution *PSE;
 
     for (Module::iterator func = M->begin(); func != M->end(); ++func){
         Function &F = *func;
@@ -398,20 +496,19 @@ static void CustomLoopAnalysis(Module *M){
             continue;
         }
 
-        
         DT = new DominatorTree(F); // dominance for Function, F
         LoopInfoBase<BasicBlock,Loop> *LI = new LoopInfoBase<BasicBlock,Loop>();
         LI->analyze(*DT); // calculate loop info
 
         for(auto li: *LI) {
             NumLoops++;
- 
-            FindInductionVariableUpdate(Context, li);
+            SmallVector<BasicBlock *, 16> ExitBlocks; 
+            getLoopExitBlocks(li, ExitBlocks);
+            FindIndVarUpdateCandidates(Context, li, ExitBlocks);
+            //CollectInductionVariables(li, PSE);
             for (BasicBlock *pred: predecessors(li->getHeader())){
                 if (li->contains(pred)){
 		            AddMetadataToBackEdge(Context, pred);
-                    //CollectInductionVariables(li->getHeader(), pred);
-                    //GetInductionVariable(li);
                 }
             }
         }
