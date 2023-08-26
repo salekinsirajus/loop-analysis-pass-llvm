@@ -6,5 +6,9 @@ int main(){
         sum += i;
     }
 
+    for (int j=10; j >= 0; j--){
+        sum -= j;
+    }
+
     return 0;
 }

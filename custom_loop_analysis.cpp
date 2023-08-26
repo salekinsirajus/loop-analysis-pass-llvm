@@ -379,9 +379,9 @@ static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L)
 
 
         if (GlobalVariable *globalVar = dyn_cast<GlobalVariable>(I->getOperand(0))) {
-            if (!globalVar->hasDefinitiveInitializer()){
+//            if (!globalVar->hasDefinitiveInitializer()){
                 return false;
-            }
+//            }
         }
 
         Instruction *LoadPointerOperand = dyn_cast_or_null<Instruction>(I->getOperand(0));
@@ -483,6 +483,23 @@ static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
     }
 }
 
+static void AnalyzeLoop(Loop *L, LLVMContext &Context, DominatorTree *DT){
+    NumLoops++;
+    for (auto subloop: L->getSubLoops()){
+       AnalyzeLoop(subloop, Context, DT);
+    }
+
+    SmallVector<BasicBlock *, 16> ExitBlocks; 
+    getLoopExitBlocks(L, ExitBlocks);
+    FindIndVarUpdateCandidates(Context, L, ExitBlocks);
+
+    for (BasicBlock *pred: predecessors(L->getHeader())){
+        if (L->contains(pred)){
+            AddMetadataToBackEdge(Context, pred);
+        }
+    }
+}
+
 static void CustomLoopAnalysis(Module *M){
     DominatorTree *DT = nullptr;
     LoopInfo *LI = nullptr;
@@ -501,16 +518,7 @@ static void CustomLoopAnalysis(Module *M){
         LI->analyze(*DT); // calculate loop info
 
         for(auto li: *LI) {
-            NumLoops++;
-            SmallVector<BasicBlock *, 16> ExitBlocks; 
-            getLoopExitBlocks(li, ExitBlocks);
-            FindIndVarUpdateCandidates(Context, li, ExitBlocks);
-            //CollectInductionVariables(li, PSE);
-            for (BasicBlock *pred: predecessors(li->getHeader())){
-                if (li->contains(pred)){
-		            AddMetadataToBackEdge(Context, pred);
-                }
-            }
+            AnalyzeLoop(li, Context, DT);
         }
     }
 }
