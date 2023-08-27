@@ -22,6 +22,8 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
+
 
 
 using namespace llvm;
@@ -35,7 +37,7 @@ struct LoopMetaDataPass : public llvm::ModulePass {
 
 	void getAnalysisUsage(llvm::AnalysisUsage &AU) const override {
 	    AU.setPreservesAll(); // Preserve module functionality
-	    // Add any required analysis passes here using AU.addRequired<PassType>();
+
 	}
     bool runOnModule(llvm::Module &M) override {
         CustomLoopAnalysis(M);
@@ -45,77 +47,30 @@ struct LoopMetaDataPass : public llvm::ModulePass {
 
 };
 
-//-----------------------------------------------------------------------------
-// Legacy PM Registration
-//-----------------------------------------------------------------------------
-// The address of this variable is used to identify the pass. The actual value
-// doesn't matter.
+// PM Registration
 char LoopMetaDataPass::ID = 0;
 
 static RegisterPass<LoopMetaDataPass> X("loop-metadata", "loop-metadata",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
 
-
-static llvm::Statistic nFunctions = {"", "Functions", "number of functions"};
-static llvm::Statistic nInstructions = {"", "Instructions", "number of instructions"};
-static llvm::Statistic nLoads = {"", "Loads", "number of loads"};
-static llvm::Statistic nStores = {"", "Stores", "number of stores"};
-
-static void summarize(Module *M) {
-    for (auto i = M->begin(); i != M->end(); i++) {
-        if (i->begin() != i->end()) {
-            nFunctions++;
-        }
-
-        for (auto j = i->begin(); j != i->end(); j++) {
-            for (auto k = j->begin(); k != j->end(); k++) {
-                Instruction &I = *k;
-                nInstructions++;
-                if (isa<LoadInst>(&I)) {
-                    nLoads++;
-                } else if (isa<StoreInst>(&I)) {
-                    nStores++;
-                }
-            }
-        }
-    }
-}
-
-
 static llvm::Statistic NumLoops = {"", "NumLoops", "number of loops analyzed"};
-static llvm::Statistic CLANoPreheader = {"", "CLANoPreheader", "absence of preheader prevents optimization"};
-static llvm::Statistic NumLoopsNoStore = {"", "NumLoopsNoStore", "subset of loops that has no Store instructions"};
-static llvm::Statistic NumLoopsNoLoad = {"", "NumLoopsNoLoad", "subset of loops that has no Load instructions"};
-static llvm::Statistic NumLoopsWithCall = {"", "NumLoopsWithCall", "subset of loops that has a call instructions"};
 
 static void __addMD(LLVMContext &Ctx, Instruction *I){
-    std::string metadata;
+    std::string metadata="IndVarUpdateInst";
 
     if (DILocation *Loc = I->getDebugLoc()) {
       unsigned Line = Loc->getLine();
 
       StringRef File = Loc->getFilename();
-      metadata = formatv("{0}:{1}", File.str(), Line);
+      metadata = formatv("ind_var_update: {0}:{1}", File.str(), Line);
 
-      MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, "canonical_ind_var"));
-      I->setMetadata("IndVarUpdateInst:", N);
     }
+  MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, metadata));
+  I->setMetadata("IndVarUpdateInst:", N);
+
 }
 
-
-static bool CollectInductionVariables(Loop *L, PredicatedScalarEvolution *PSE){
-    BasicBlock *LoopHeader = L->getHeader();
-
-    for (BasicBlock::iterator I = LoopHeader->begin(); I != LoopHeader->end(); ++I) {
-        Instruction &i = *I;
-        if (i.isBinaryOp()){
-            const SCEV *se = PSE->getSCEV(i.getOperand(0));
-            }
-        }
-
-      return false;
-}
 
 static void getLoopExitBlocks(Loop *L, SmallVector<BasicBlock*, 16> &ExitingBBs){
     L->getExitingBlocks(ExitingBBs);
@@ -126,8 +81,6 @@ static void getLoopExitBlocks(Loop *L, SmallVector<BasicBlock*, 16> &ExitingBBs)
             it = ExitingBBs.erase(it);
        
         } else {
-            // If the item meets the criteria, move to the next item
-            errs() << "considering exit block " << (*it) << "\n";
             ++it;
         }
     }
@@ -153,55 +106,59 @@ static bool CompareInstDeterminesLoopExitCondition(Instruction *I, Loop *L, Smal
         if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
             // Check if the user instruction is in the loop's exit blocks
             if (isAnExitBlock(UserInst->getParent(), ExitBlocks)) {
-                errs() << "Use: " << *UserInst << "\n";
+                return true; 
             }
         }
     }
 
-    return true;
+    return false;
 }
 
 static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L){
+    //We are using a heuristic as opposed to things like ScalarEvolution to
+    //figure out the basic induction variable. Some cases will be missed but
+    //hopefully we will cathc the most common ones with this. If we run a pass
+    //like LoopRotate and IndVarSimplify before this, we should be able to catch
+    //most of these since the loops will be in canonical form. I did not use
+    //them so that this pass can be as self-contained as possible
+    //heuristic
     //it is a binary op 
     //it is either Add, Sub
     // is a canonical induction update
-    errs() << "isInductionVariable " << *I << "\n";
     Value *op0, *op1;
     
     Instruction *desired = nullptr;
-    if (I->getOpcode() == Instruction::Add) {
+    if (I->getOpcode() == Instruction::Add || I->getOpcode() == Instruction::Sub
+        || I->getOpcode() == Instruction::Shl || I->getOpcode() == Instruction::LShr) {
+        //these are most commonly used ops to updated ind var, if we
+        //canonicalize the loop or perform strength reduction we need to only
+        //keep Add (for float as well). This will get some false negatives
         op0 = I->getOperand(0);
         op1 = I->getOperand(1);
 
-        errs() << "found an add " << I << "\n";
         if (L->isLoopInvariant(op0) || L->isLoopInvariant(op1)){
-            errs() << "Found the instruction! " << *I << "\n";
             desired = I;
         }
 
     }
-    else if (I->getOpcode() == Instruction::Sub){
-       errs() << "found an Sub" << I << "\n";
-        return false;
-    }
+
     else if (I->getOpcode() == Instruction::Mul){
-       errs() << "found an Mul" << I << "\n";
         return false;
     }
 
     else if (I->getOpcode() == Instruction::Alloca){
-        errs() << "Considering an Alloca instruction\n"; 
         //see if this alloca is used as an induction variable
         if (I->use_empty()) return false;
     }
 
     else if (I->getOpcode() == Instruction::Load){
-        errs() << "Considering a Load instruction\n"; 
         if (LoadInst *L = dyn_cast<LoadInst>(I)){
             if (L->isVolatile()) return false;
         }
 
-
+        //Discarding all induction variables that is allocated as a global since
+        //traversing their uses cause a segfault. Not sure what to do about
+        //these
         if (GlobalVariable *globalVar = dyn_cast<GlobalVariable>(I->getOperand(0))) {
             if (!globalVar->hasDefinitiveInitializer()){
                 return false;
@@ -212,12 +169,10 @@ static bool isInductionVariableUpdate(LLVMContext &Ctx, Instruction* I, Loop *L)
         if (LoadPointerOperand->use_empty()) return false;
 
         for (User *U : LoadPointerOperand->users()) {
-            errs() <<"===considering load's usage " << U <<"\n";
             if (StoreInst *Store = dyn_cast_or_null<StoreInst>(U)) {
                 Value *StorePointerOperand = Store->getPointerOperand();
                 if (LoadPointerOperand == StorePointerOperand) {
-                    errs() << "Found a Load and Store accessing the same memory address " << *Store << "\n";
-                        //what are you storing? 
+                    //"Found a Load and Store accessing the same memory address " << *Store << "\n";
                         Value *StoreValueOp = Store->getValueOperand();
                         if (Instruction *StoreValue = dyn_cast_or_null<Instruction>(StoreValueOp)){
                             if (isInductionVariableUpdate(Ctx, StoreValue, L)){
@@ -273,12 +228,6 @@ static void FindIndVarUpdateCandidates(LLVMContext &Ctx, Loop *L, SmallVector<Ba
         }
     }
 
-    if (NonConstOps.empty()){
-        errs() << "FOUND NO UPDATE VAR\n";
-    } else {
-        errs() << "found some instruction to consider as ind var\n";
-    }
-
     for (auto *inst: NonConstOps){
         if (isInductionVariableUpdate(Ctx, inst, L)){
             return;
@@ -293,12 +242,12 @@ static void AddMetadataToBackEdge(LLVMContext &Ctx, BasicBlock *BB){
         if (isa<BranchInst>(i)){
 
             // we can only add lineno and filename if debug is enabled
-            std::string metadata="cla";
+            std::string metadata="backedge";
             if (DILocation *Loc = i.getDebugLoc()) {
               unsigned Line = Loc->getLine();
 
               StringRef File = Loc->getFilename();
-              metadata = formatv("cla: {0}:{1}", File.str(), Line);
+              metadata = formatv("backedge: {0}:{1}", File.str(), Line);
             }
             
             MDNode* N = MDNode::get(Ctx, MDString::get(Ctx, metadata));

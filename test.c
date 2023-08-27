@@ -3,11 +3,8 @@
 
 int main(){
     int sum = 0;
-    int i, j=0;
-    while (i < 10){
-        j = j+i; 
-        sum += i;
-        i++;
+    for (int i=0; i<10; i++){
+        sum += 10;
     }
 
     return sum;
